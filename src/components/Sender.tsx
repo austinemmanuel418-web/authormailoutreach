@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { CheckResult, Recipient } from "@/lib/emails";
-import { fillText, findLeftovers } from "@/lib/template";
+import { buildEmail, emailProblem } from "@/lib/template";
 import {
   DEFAULT_SETTINGS,
   addSentToday,
@@ -14,6 +14,7 @@ import {
   saveSettings,
 } from "@/lib/storage";
 import type { Message, Settings } from "@/lib/storage";
+import Preview from "@/components/Preview";
 
 type Props = {
   recipients: Recipient[];
@@ -90,17 +91,6 @@ export default function Sender({
     setRecipients((prev) => prev.map((r) => (r.email === email ? { ...r, ...patch } : r)));
   }
 
-  // Returns a problem text, or null if the message is fine
-  function messageProblem(): string | null {
-    if (!message.subject.trim()) return "Please write a subject.";
-    if (!message.body.trim()) return "Please write a message.";
-    const left = [...findLeftovers(message.subject), ...findLeftovers(message.body)];
-    if (left.length > 0) {
-      return `Fill or remove this bracket text first: ${[...new Set(left)].join(", ")}`;
-    }
-    return null;
-  }
-
   // Random wait between emails, with a countdown. Stop ends it early.
   async function waitRandom() {
     const min = Math.max(0, settings.minWait);
@@ -112,20 +102,21 @@ export default function Sender({
     }
   }
 
-  // "Send test to me": always goes to your own Gmail
+  // "Send test to me": always goes to your own Gmail.
+  // It uses the FIRST person on the list as the example.
   async function sendTest() {
-    const problem = messageProblem();
+    const mail = buildEmail(recipients[0] ?? { name: "" }, message);
+    const problem = emailProblem(mail);
     if (problem) {
-      setInfo(problem);
+      setInfo(`Cannot send test: ${problem}`);
       return;
     }
     setTesting(true);
     setInfo("Sending test...");
-    const name = recipients[0]?.name ?? ""; // use the first name on the list as an example
     const { status, data } = await callApi("/api/send", password, {
       test: true,
-      subject: "TEST: " + fillText(message.subject, name),
-      body: fillText(message.body, name),
+      subject: "TEST: " + mail.subject,
+      body: mail.body,
     });
     if (status === 401) {
       onUnauthorized();
@@ -135,36 +126,42 @@ export default function Sender({
     setTesting(false);
   }
 
-  // kind "all" = people who are waiting, "retry" = people who failed
-  async function startRun(kind: "all" | "retry") {
-    const problem = messageProblem();
-    if (problem) {
-      setInfo(problem);
-      return;
-    }
-
-    const targets = recipients.filter((r) => r.status === (kind === "retry" ? "failed" : "waiting"));
+  // The main sending loop. Works for one person or for many.
+  async function run(targets: Recipient[]) {
     if (targets.length === 0) {
-      setInfo(kind === "retry" ? "No failed emails to retry." : "Nothing is waiting to be sent.");
+      setInfo("Nothing to send.");
       return;
     }
 
     // Confirm box
     const count = Math.min(targets.length, settings.limit);
     const ok = window.confirm(
-      `Send "${message.subject}" to up to ${count} ${count === 1 ? "person" : "people"} now?\n\n` +
-        `This uses your real Gmail account.`
+      count === 1 && targets.length === 1
+        ? `Send this email to ${targets[0].email} now?\n\nThis uses your real Gmail account.`
+        : `Send to up to ${count} people now?\n\nEach person gets the email you saw in the preview.\nThis uses your real Gmail account.`
     );
     if (!ok) return;
 
     stopRef.current = false;
     setRunning(true);
     try {
+      // STEP 0: check each person's final subject + message
+      const readyList: Recipient[] = [];
+      for (const r of targets) {
+        const problem = emailProblem(buildEmail(r, message));
+        if (problem) setOne(r.email, { status: "failed", error: problem });
+        else readyList.push(r);
+      }
+      if (readyList.length === 0) {
+        setInfo("Nothing was sent. See the reasons in the list and in the preview.");
+        return;
+      }
+
       // STEP 1: check addresses (typos + MX), 40 at a time
       setInfo("Checking addresses...");
       const good: Recipient[] = [];
-      for (let i = 0; i < targets.length; i += 40) {
-        const chunk = targets.slice(i, i + 40);
+      for (let i = 0; i < readyList.length; i += 40) {
+        const chunk = readyList.slice(i, i + 40);
         const { status, data } = await callApi("/api/check", password, {
           emails: chunk.map((r) => r.email),
         });
@@ -216,13 +213,14 @@ export default function Sender({
       for (let i = 0; i < batch.length; i++) {
         if (stopRef.current) break;
         const r = batch[i];
+        const mail = buildEmail(r, message); // this person's own email
         setOne(r.email, { status: "sending", error: undefined });
         setInfo(`Sending ${i + 1} of ${batch.length} to ${r.email}...`);
 
         const { status, data } = await callApi("/api/send", password, {
           to: r.email,
-          subject: fillText(message.subject, r.name),
-          body: fillText(message.body, r.name),
+          subject: mail.subject,
+          body: mail.body,
         });
 
         if (status === 401) {
@@ -253,99 +251,123 @@ export default function Sender({
     }
   }
 
+  // "Send all": everyone who is waiting
+  function sendAll() {
+    const targets = recipients.filter((r) => r.status === "waiting");
+    if (targets.length === 0) setInfo("Nothing is waiting to be sent.");
+    else run(targets);
+  }
+
+  // "Retry failed": everyone who failed
+  function retryFailed() {
+    const targets = recipients.filter((r) => r.status === "failed");
+    if (targets.length === 0) setInfo("No failed emails to retry.");
+    else run(targets);
+  }
+
+  // "Send this one" (button in the preview)
+  function sendOne(email: string) {
+    const r = recipients.find((x) => x.email === email);
+    if (r) run([r]);
+  }
+
   function stop() {
     stopRef.current = true;
     setInfo("Stopping after the current email...");
   }
 
   return (
-    <section className="card">
-      <h2 className="mb-4 text-lg font-semibold">3. Send</h2>
+    <>
+      <Preview recipients={recipients} message={message} busy={busy} onSendOne={sendOne} />
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div>
-          <label htmlFor="minWait" className="label">
-            Wait at least (seconds)
-          </label>
-          <input
-            id="minWait"
-            type="number"
-            min={0}
-            inputMode="numeric"
-            className="input"
-            disabled={busy}
-            value={settings.minWait}
-            onChange={(e) => setSettings({ ...settings, minWait: num(e.target.value) })}
-          />
+      <section className="card">
+        <h2 className="mb-4 text-lg font-semibold">4. Send</h2>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <div>
+            <label htmlFor="minWait" className="label">
+              Wait at least (seconds)
+            </label>
+            <input
+              id="minWait"
+              type="number"
+              min={0}
+              inputMode="numeric"
+              className="input"
+              disabled={busy}
+              value={settings.minWait}
+              onChange={(e) => setSettings({ ...settings, minWait: num(e.target.value) })}
+            />
+          </div>
+          <div>
+            <label htmlFor="maxWait" className="label">
+              Wait at most (seconds)
+            </label>
+            <input
+              id="maxWait"
+              type="number"
+              min={0}
+              inputMode="numeric"
+              className="input"
+              disabled={busy}
+              value={settings.maxWait}
+              onChange={(e) => setSettings({ ...settings, maxWait: num(e.target.value) })}
+            />
+          </div>
+          <div>
+            <label htmlFor="limit" className="label">
+              Emails per run (limit)
+            </label>
+            <input
+              id="limit"
+              type="number"
+              min={1}
+              inputMode="numeric"
+              className="input"
+              disabled={busy}
+              value={settings.limit}
+              onChange={(e) => setSettings({ ...settings, limit: num(e.target.value) })}
+            />
+          </div>
         </div>
-        <div>
-          <label htmlFor="maxWait" className="label">
-            Wait at most (seconds)
-          </label>
-          <input
-            id="maxWait"
-            type="number"
-            min={0}
-            inputMode="numeric"
-            className="input"
-            disabled={busy}
-            value={settings.maxWait}
-            onChange={(e) => setSettings({ ...settings, maxWait: num(e.target.value) })}
-          />
-        </div>
-        <div>
-          <label htmlFor="limit" className="label">
-            Emails per run (limit)
-          </label>
-          <input
-            id="limit"
-            type="number"
-            min={1}
-            inputMode="numeric"
-            className="input"
-            disabled={busy}
-            value={settings.limit}
-            onChange={(e) => setSettings({ ...settings, limit: num(e.target.value) })}
-          />
-        </div>
-      </div>
 
-      <p className="mt-4 font-semibold">
-        Sent today: {sentToday} / {settings.limit}
-      </p>
-
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-        <button type="button" onClick={sendTest} disabled={busy} className="btn btn-secondary">
-          Send test to me
-        </button>
-        <button
-          type="button"
-          onClick={() => startRun("all")}
-          disabled={busy || recipients.length === 0}
-          className="btn btn-primary"
-        >
-          Send all
-        </button>
-        <button
-          type="button"
-          onClick={() => startRun("retry")}
-          disabled={busy || failedCount === 0}
-          className="btn btn-secondary"
-        >
-          Retry failed ({failedCount})
-        </button>
-        {running && (
-          <button type="button" onClick={stop} className="btn btn-danger">
-            Stop
-          </button>
-        )}
-      </div>
-
-      {info && (
-        <p aria-live="polite" className="mt-4 text-sm font-medium text-gray-800 dark:text-gray-200">
-          {info}
+        <p className="mt-4 font-semibold">
+          Sent today: {sentToday} / {settings.limit}
         </p>
-      )}
-    </section>
+
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+          <button type="button" onClick={sendTest} disabled={busy} className="btn btn-secondary">
+            Send test to me
+          </button>
+          <button
+            type="button"
+            onClick={sendAll}
+            disabled={busy || recipients.length === 0}
+            className="btn btn-primary"
+          >
+            Send all
+          </button>
+          <button
+            type="button"
+            onClick={retryFailed}
+            disabled={busy || failedCount === 0}
+            className="btn btn-secondary"
+          >
+            Retry failed ({failedCount})
+          </button>
+          {running && (
+            <button type="button" onClick={stop} className="btn btn-danger">
+              Stop
+            </button>
+          )}
+        </div>
+
+        {info && (
+          <p aria-live="polite" className="mt-4 text-sm font-medium text-gray-800 dark:text-gray-200">
+            {info}
+          </p>
+        )}
+      </section>
+    </>
   );
 }

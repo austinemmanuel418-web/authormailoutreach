@@ -6,10 +6,10 @@ Sends one plain-text message to many people through your Gmail.
 
 1. Unzip this folder. In VS Code: File > Open Folder > pick `bulk-mailer`.
 2. Open the terminal in VS Code (Ctrl + `) and run:
-       npm install
+   npm install
 3. Copy `.env.example` and name the copy `.env.local`. Fill in your 4 values.
 4. Run:
-       npm run dev
+   npm run dev
    Open http://localhost:3000
 
 ## Gmail App Password
@@ -26,3 +26,10 @@ Sends one plain-text message to many people through your Gmail.
 4. Click Deploy.
 
 .env.local is ignored by git (see .gitignore). Never commit it.
+
+Personalized messages update
+Unzip this over your bulk-mailer project and click "Replace" for the 4 files:
+src/lib/emails.ts
+src/lib/template.ts
+src/components/Sender.tsx
+src/components/Preview.tsx (new file)

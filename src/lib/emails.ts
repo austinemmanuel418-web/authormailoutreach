@@ -7,6 +7,8 @@ export type Recipient = {
   name: string;
   status: Status;
   error?: string; // the reason, when status is "failed"
+  subject?: string; // this person's own subject from the CSV (optional)
+  message?: string; // this person's own message from the CSV (optional)
 };
 
 // Answer from /api/check for one address
@@ -17,7 +19,12 @@ export type CheckResult = {
   suggestion?: string;
 };
 
-type Parsed = { email: string; name: string };
+export type Parsed = {
+  email: string;
+  name: string;
+  subject?: string;
+  message?: string;
+};
 
 // Simple format check: something@something.tld, no spaces
 const EMAIL_RE = /^[^\s@,;<>()"]+@[^\s@,;<>()"]+\.[^\s@,;<>()"]{2,}$/;
@@ -29,7 +36,10 @@ export function isValidFormat(email: string): boolean {
 const FIND_RE = /[^\s,;<>()"]+@[^\s,;<>()"]+/;
 
 // Pasted text: one per line, optional name after the email
-export function parsePasted(text: string): { items: Parsed[]; skipped: number } {
+export function parsePasted(text: string): {
+  items: Parsed[];
+  skipped: number;
+} {
   const items: Parsed[] = [];
   let skipped = 0;
   for (const raw of text.split(/\r?\n/)) {
@@ -52,63 +62,172 @@ export function parsePasted(text: string): { items: Parsed[]; skipped: number } 
   return { items, skipped };
 }
 
-// Splits one CSV line into cells (handles "quoted, text")
-function splitCsvLine(line: string): string[] {
-  const cells: string[] = [];
+// Guess the separator from the first line: comma, semicolon or tab
+function detectDelimiter(text: string): string {
+  const first = text.split(/\r?\n/)[0] ?? "";
+  const counts: [string, number][] = [
+    [",", first.split(",").length],
+    [";", first.split(";").length],
+    ["\t", first.split("\t").length],
+  ];
+  counts.sort((a, b) => b[1] - a[1]);
+  return counts[0][1] > 1 ? counts[0][0] : ",";
+}
+
+// Reads the whole CSV into rows of cells.
+// Handles "quoted cells" that contain commas AND new lines (long messages).
+function parseCsvRows(text: string, delimiter: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
   let cur = "";
   let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
     if (inQuotes) {
-      if (c === '"' && line[i + 1] === '"') {
-        cur += '"';
+      if (c === '"' && text[i + 1] === '"') {
+        cur += '"'; // "" inside quotes means one quote
         i++;
       } else if (c === '"') {
         inQuotes = false;
       } else {
-        cur += c;
+        cur += c; // new lines inside quotes stay part of the cell
       }
-    } else if (c === '"') {
-      inQuotes = true;
-    } else if (c === "," || c === ";") {
-      cells.push(cur);
+    } else if (c === '"' && cur === "") {
+      inQuotes = true; // a quote at the start of a cell opens quotes
+    } else if (c === delimiter) {
+      row.push(cur);
       cur = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && text[i + 1] === "\n") i++;
+      row.push(cur);
+      cur = "";
+      rows.push(row);
+      row = [];
     } else {
       cur += c;
     }
   }
-  cells.push(cur);
-  return cells.map((s) => s.trim());
+  // Last cell (when the file does not end with a new line)
+  if (cur !== "" || row.length > 0) {
+    row.push(cur);
+    rows.push(row);
+  }
+  // Drop completely empty rows
+  return rows.filter((r) => r.some((cell) => cell.trim() !== ""));
 }
 
-// CSV with columns: email, name (header row is optional)
-export function parseCsv(text: string): { items: Parsed[]; skipped: number } {
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/).filter((l) => l.trim());
-  const items: Parsed[] = [];
-  let skipped = 0;
-  if (lines.length === 0) return { items, skipped };
-
-  let emailCol = 0;
-  let nameCol = 1;
-  let start = 0;
-  const header = splitCsvLine(lines[0]).map((h) => h.toLowerCase());
-  if (header.includes("email")) {
-    emailCol = header.indexOf("email");
-    nameCol = header.indexOf("name"); // -1 if there is no name column
-    start = 1;
+// CSV columns: email, name, subject, message.
+// Header names can vary ("Email Address", "Author Name", "Personalized Message").
+// Without a header row the order is: email, name.
+export function parseCsv(text: string): {
+  items: Parsed[];
+  skipped: number;
+  columns: string; // tells you which columns were found
+  withMessage: number; // how many rows have their own message
+  withSubject: number; // how many rows have their own subject
+} {
+  const clean = text.replace(/^\uFEFF/, "");
+  let rows = parseCsvRows(clean, detectDelimiter(clean));
+  // Excel sometimes adds a first line like "sep=," : ignore it
+  if (
+    rows.length > 0 &&
+    rows[0].length === 1 &&
+    /^sep=/i.test(rows[0][0].trim())
+  ) {
+    rows = rows.slice(1);
   }
 
-  for (let i = start; i < lines.length; i++) {
-    const cells = splitCsvLine(lines[i]);
-    const email = (cells[emailCol] ?? "").toLowerCase();
-    const name = nameCol >= 0 ? cells[nameCol] ?? "" : "";
+  const items: Parsed[] = [];
+  let skipped = 0;
+  if (rows.length === 0) {
+    return {
+      items,
+      skipped,
+      columns: "The file is empty.",
+      withMessage: 0,
+      withSubject: 0,
+    };
+  }
+
+  // Simple header names: lowercase, only letters and numbers
+  const header = rows[0].map((h) =>
+    h
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim(),
+  );
+
+  let subjectCol = header.findIndex((h) => h.includes("subject"));
+  let messageCol = header.findIndex(
+    (h, i) =>
+      i !== subjectCol &&
+      /message|body|content|personali[sz]ed|pitch|draft|text/.test(h),
+  );
+  const foundEmail = header.findIndex(
+    (h, i) => i !== subjectCol && i !== messageCol && /e ?mail/.test(h),
+  );
+
+  // It is a header row only if it has an email column and no real address in it
+  const hasHeader = foundEmail >= 0 && !rows[0].some((c) => c.includes("@"));
+  if (!hasHeader) {
+    subjectCol = -1;
+    messageCol = -1;
+  }
+
+  const emailCol = hasHeader ? foundEmail : 0;
+  const nameCol = hasHeader
+    ? header.findIndex(
+        (h, i) =>
+          ![emailCol, subjectCol, messageCol].includes(i) &&
+          /name|author/.test(h),
+      )
+    : 1;
+
+  let withMessage = 0;
+  let withSubject = 0;
+  for (let i = hasHeader ? 1 : 0; i < rows.length; i++) {
+    const cells = rows[i];
+    const email = (cells[emailCol] ?? "").trim().toLowerCase();
     if (!email.includes("@")) {
       skipped++;
       continue;
     }
-    items.push({ email, name });
+    const message =
+      messageCol >= 0
+        ? (cells[messageCol] ?? "").replace(/\r\n?/g, "\n").trim() || undefined
+        : undefined;
+    const subject =
+      subjectCol >= 0
+        ? (cells[subjectCol] ?? "").replace(/\s+/g, " ").trim() || undefined
+        : undefined;
+    if (message) withMessage++;
+    if (subject) withSubject++;
+    items.push({
+      email,
+      name: nameCol >= 0 ? (cells[nameCol] ?? "").trim() : "",
+      subject,
+      message,
+    });
   }
-  return { items, skipped };
+
+  // A short report so you can see what the app found
+  const label = (i: number) => (i >= 0 ? `"${rows[0][i].trim()}"` : "none");
+  const columns = hasHeader
+    ? `Columns used: email = ${label(emailCol)}, name = ${label(nameCol)}, subject = ${label(
+        subjectCol,
+      )}, message = ${label(messageCol)}.` +
+      (messageCol < 0 || subjectCol < 0
+        ? ` Not found: ${[
+            subjectCol < 0 ? "subject" : "",
+            messageCol < 0 ? "message" : "",
+          ]
+            .filter(Boolean)
+            .join(" and ")}. Your headers: ${rows[0].join(", ")}.`
+        : "")
+    : "No header row found: used column 1 as email and column 2 as name.";
+
+  return { items, skipped, columns, withMessage, withSubject };
 }
 
 // Adds new people to the list and removes duplicates
@@ -127,6 +246,8 @@ export function mergeRecipients(existing: Recipient[], items: Parsed[]) {
     list.push({
       email: it.email,
       name: it.name,
+      subject: it.subject,
+      message: it.message,
       status: ok ? "waiting" : "failed",
       error: ok ? undefined : "Invalid email format",
     });

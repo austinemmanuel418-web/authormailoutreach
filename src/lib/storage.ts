@@ -3,11 +3,7 @@
 export type Message = { subject: string; body: string };
 export type Settings = { minWait: number; maxWait: number; limit: number };
 
-export const DEFAULT_SETTINGS: Settings = {
-  minWait: 2,
-  maxWait: 4,
-  limit: 300,
-};
+export const DEFAULT_SETTINGS: Settings = { minWait: 10, maxWait: 20, limit: 30 };
 
 const KEYS = {
   message: "bulk:message",
@@ -35,8 +31,7 @@ function write(key: string, value: unknown) {
 }
 
 // Message
-export const loadMessage = () =>
-  read<Message>(KEYS.message, { subject: "", body: "" });
+export const loadMessage = () => read<Message>(KEYS.message, { subject: "", body: "" });
 export const saveMessage = (m: Message) => write(KEYS.message, m);
 
 // Settings (wait time, limit)
@@ -59,10 +54,7 @@ function today(): string {
   return new Date().toLocaleDateString("en-CA"); // looks like 2026-11-13
 }
 export function getSentToday(): number {
-  const d = read<{ date: string; count: number }>(KEYS.daily, {
-    date: "",
-    count: 0,
-  });
+  const d = read<{ date: string; count: number }>(KEYS.daily, { date: "", count: 0 });
   return d.date === today() ? d.count : 0;
 }
 export function addSentToday(): number {

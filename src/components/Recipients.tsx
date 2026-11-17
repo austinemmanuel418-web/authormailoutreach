@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { ChangeEvent, Dispatch, SetStateAction } from "react";
 import { mergeRecipients, parseCsv, parsePasted } from "@/lib/emails";
-import type { Recipient, Status } from "@/lib/emails";
+import type { Parsed, Recipient, Status } from "@/lib/emails";
 
 type Props = {
   recipients: Recipient[];
@@ -28,17 +28,14 @@ export default function Recipients({
   const [note, setNote] = useState("");
 
   // Add parsed people to the list and tell the user what happened
-  function addParsed(parsed: {
-    items: { email: string; name: string }[];
-    skipped: number;
-  }) {
+  function addParsed(parsed: { items: Parsed[]; skipped: number }, extra = "") {
     const { list, added, duplicates } = mergeRecipients(
       recipients,
       parsed.items,
     );
     setRecipients(list);
     setNote(
-      `Added ${added}. Duplicates removed: ${duplicates}. Lines skipped (no email found): ${parsed.skipped}.`,
+      `Added ${added}. Duplicates removed: ${duplicates}. Lines skipped (no email found): ${parsed.skipped}. ${extra}`,
     );
   }
 
@@ -50,13 +47,18 @@ export default function Recipients({
   async function handleFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
-    addParsed(parseCsv(await file.text()));
+    const parsed = parseCsv(await file.text());
+    addParsed(
+      parsed,
+      `${parsed.columns} Rows with their own subject: ${parsed.withSubject}. Rows with their own message: ${parsed.withMessage}.`,
+    );
     e.target.value = ""; // so the same file can be picked again
   }
 
   function remove(email: string) {
     setRecipients((prev) => prev.filter((r) => r.email !== email));
   }
+
   // Remove everyone from the list at once
   function clearAll() {
     if (
@@ -76,8 +78,8 @@ export default function Recipients({
     <section className="card">
       <h2 className="mb-1 text-lg font-semibold">1. Recipients</h2>
       <p className="mb-4 text-sm text-gray-600 dark:text-gray-400">
-        One email per line. You can add a name after the email. Or upload a CSV
-        with the columns email and name.
+        Paste one email per line (a name after the email is optional). Or upload
+        a CSV with the columns email, name, subject, message.
       </p>
 
       <label htmlFor="paste" className="label">
@@ -116,6 +118,7 @@ export default function Recipients({
       {note && (
         <p className="mt-3 text-sm text-gray-700 dark:text-gray-300">{note}</p>
       )}
+
       <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
         <p className="font-semibold">
           Recipients: {recipients.length}
@@ -136,41 +139,52 @@ export default function Recipients({
       </div>
 
       {recipients.length > 0 && (
-        <ul className="mt-3 max-h-96 divide-y divide-gray-200 overflow-y-auto rounded-xl border border-gray-200 dark:divide-gray-800 dark:border-gray-800">
-          {recipients.map((r) => (
-            <li
-              key={r.email}
-              className="flex items-start justify-between gap-3 p-3"
-            >
-              <div className="min-w-0">
-                <p className="break-all font-medium">{r.email}</p>
-                {r.name && (
-                  <p className="text-sm text-gray-600 dark:text-gray-400">
-                    {r.name}
+        <ul className="mt-3 max-h-[32rem] divide-y divide-gray-200 overflow-y-auto rounded-xl border border-gray-200 dark:divide-gray-800 dark:border-gray-800">
+          {recipients.map((r, i) => (
+            <li key={r.email} className="p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="break-all font-medium">
+                    {i + 1}. {r.email}
                   </p>
-                )}
-                {r.status === "failed" && r.error && (
-                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">
-                    {r.error}
-                  </p>
-                )}
-              </div>
-              <div className="flex shrink-0 flex-col items-end gap-2 sm:flex-row sm:items-center">
+                  {r.name && (
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      {r.name}
+                    </p>
+                  )}
+                </div>
                 <span
-                  className={`rounded-full px-3 py-1 text-xs font-semibold ${BADGE[r.status]}`}
+                  className={`shrink-0 rounded-full px-3 py-1 text-xs font-semibold ${BADGE[r.status]}`}
                 >
                   {r.status}
                 </span>
-                <button
-                  type="button"
-                  disabled={locked}
-                  onClick={() => remove(r.email)}
-                  aria-label={`Remove ${r.email}`}
-                  className="btn btn-secondary px-4"
-                >
-                  Remove
-                </button>
               </div>
+
+              {r.subject && (
+                <p className="mt-2 break-words text-sm">
+                  <span className="font-semibold">Subject:</span> {r.subject}
+                </p>
+              )}
+              {r.message && (
+                <p className="mt-1 line-clamp-3 whitespace-pre-line break-words text-sm text-gray-700 dark:text-gray-300">
+                  <span className="font-semibold">Message:</span> {r.message}
+                </p>
+              )}
+              {r.status === "failed" && r.error && (
+                <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                  {r.error}
+                </p>
+              )}
+
+              <button
+                type="button"
+                disabled={locked}
+                onClick={() => remove(r.email)}
+                aria-label={`Remove ${r.email}`}
+                className="btn btn-secondary mt-2 px-4"
+              >
+                Remove
+              </button>
             </li>
           ))}
         </ul>
