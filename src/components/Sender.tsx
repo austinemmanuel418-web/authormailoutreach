@@ -34,12 +34,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function callApi(
   path: string,
   password: string,
-  payload: unknown
+  payload: unknown,
 ): Promise<{ status: number; data: ApiData }> {
   try {
     const res = await fetch(path, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-app-password": password },
+      headers: {
+        "Content-Type": "application/json",
+        "x-app-password": password,
+      },
       body: JSON.stringify(payload),
     });
     const data = (await res.json().catch(() => ({}))) as ApiData;
@@ -88,7 +91,9 @@ export default function Sender({
 
   // Change one row (found by email)
   function setOne(email: string, patch: Partial<Recipient>) {
-    setRecipients((prev) => prev.map((r) => (r.email === email ? { ...r, ...patch } : r)));
+    setRecipients((prev) =>
+      prev.map((r) => (r.email === email ? { ...r, ...patch } : r)),
+    );
   }
 
   // Random wait between emails, with a countdown. Stop ends it early.
@@ -121,7 +126,11 @@ export default function Sender({
     if (status === 401) {
       onUnauthorized();
     } else {
-      setInfo(data.ok ? "Test email sent to your own Gmail." : `Test failed: ${data.error ?? "unknown error"}`);
+      setInfo(
+        data.ok
+          ? "Test email sent to your own Gmail."
+          : `Test failed: ${data.error ?? "unknown error"}`,
+      );
     }
     setTesting(false);
   }
@@ -138,7 +147,7 @@ export default function Sender({
     const ok = window.confirm(
       count === 1 && targets.length === 1
         ? `Send this email to ${targets[0].email} now?\n\nThis uses your real Gmail account.`
-        : `Send to up to ${count} people now?\n\nEach person gets the email you saw in the preview.\nThis uses your real Gmail account.`
+        : `Send to up to ${count} people now?\n\nEach person gets the email you saw in the preview.\nThis uses your real Gmail account.`,
     );
     if (!ok) return;
 
@@ -153,7 +162,9 @@ export default function Sender({
         else readyList.push(r);
       }
       if (readyList.length === 0) {
-        setInfo("Nothing was sent. See the reasons in the list and in the preview.");
+        setInfo(
+          "Nothing was sent. See the reasons in the list and in the preview.",
+        );
         return;
       }
 
@@ -170,13 +181,16 @@ export default function Sender({
           return;
         }
         if (!data.results) {
-          setInfo(`Address check failed: ${data.error ?? "server error"}. Nothing was sent.`);
+          setInfo(
+            `Address check failed: ${data.error ?? "server error"}. Nothing was sent.`,
+          );
           return;
         }
         const byEmail = new Map(data.results.map((r) => [r.email, r]));
         for (const r of chunk) {
           const res = byEmail.get(r.email);
-          if (res && !res.ok) setOne(r.email, { status: "failed", error: res.reason });
+          if (res && !res.ok)
+            setOne(r.email, { status: "failed", error: res.reason });
           else good.push(r);
         }
       }
@@ -188,13 +202,19 @@ export default function Sender({
       if (again.length > 0) {
         const sendAgain = window.confirm(
           `${again.length} address(es) were already emailed before:\n\n` +
-            again.slice(0, 5).map((r) => r.email).join("\n") +
+            again
+              .slice(0, 5)
+              .map((r) => r.email)
+              .join("\n") +
             (again.length > 5 ? "\n..." : "") +
-            `\n\nOK = send to them again\nCancel = skip them`
+            `\n\nOK = send to them again\nCancel = skip them`,
         );
         if (!sendAgain) {
           for (const r of again) {
-            setOne(r.email, { status: "failed", error: "Skipped: already emailed before" });
+            setOne(r.email, {
+              status: "failed",
+              error: "Skipped: already emailed before",
+            });
           }
           queue = good.filter((r) => !log[r.email]);
         }
@@ -235,7 +255,10 @@ export default function Sender({
           setOne(r.email, { status: "sent" });
         } else {
           failed++;
-          setOne(r.email, { status: "failed", error: data.error ?? `Server error (${status})` });
+          setOne(r.email, {
+            status: "failed",
+            error: data.error ?? `Server error (${status})`,
+          });
         }
 
         if (i < batch.length - 1 && !stopRef.current) await waitRandom();
@@ -244,7 +267,7 @@ export default function Sender({
       const left = queue.length - batch.length;
       setInfo(
         `${stopRef.current ? "Stopped." : "Finished."} Sent: ${sent}. Failed: ${failed}.` +
-          (left > 0 ? ` ${left} still waiting (run limit reached).` : "")
+          (left > 0 ? ` ${left} still waiting (run limit reached).` : ""),
       );
     } finally {
       setRunning(false);
@@ -271,6 +294,16 @@ export default function Sender({
     if (r) run([r]);
   }
 
+  // Save an edit made in the preview (subject and message for one person)
+  function editOne(email: string, subject: string, body: string) {
+    setOne(email, {
+      subject,
+      message: body,
+      status: "waiting",
+      error: undefined,
+    });
+  }
+
   function stop() {
     stopRef.current = true;
     setInfo("Stopping after the current email...");
@@ -278,7 +311,13 @@ export default function Sender({
 
   return (
     <>
-      <Preview recipients={recipients} message={message} busy={busy} onSendOne={sendOne} />
+      <Preview
+        recipients={recipients}
+        message={message}
+        busy={busy}
+        onSendOne={sendOne}
+        onEdit={editOne}
+      />
 
       <section className="card">
         <h2 className="mb-4 text-lg font-semibold">4. Send</h2>
@@ -296,7 +335,9 @@ export default function Sender({
               className="input"
               disabled={busy}
               value={settings.minWait}
-              onChange={(e) => setSettings({ ...settings, minWait: num(e.target.value) })}
+              onChange={(e) =>
+                setSettings({ ...settings, minWait: num(e.target.value) })
+              }
             />
           </div>
           <div>
@@ -311,7 +352,9 @@ export default function Sender({
               className="input"
               disabled={busy}
               value={settings.maxWait}
-              onChange={(e) => setSettings({ ...settings, maxWait: num(e.target.value) })}
+              onChange={(e) =>
+                setSettings({ ...settings, maxWait: num(e.target.value) })
+              }
             />
           </div>
           <div>
@@ -326,7 +369,9 @@ export default function Sender({
               className="input"
               disabled={busy}
               value={settings.limit}
-              onChange={(e) => setSettings({ ...settings, limit: num(e.target.value) })}
+              onChange={(e) =>
+                setSettings({ ...settings, limit: num(e.target.value) })
+              }
             />
           </div>
         </div>
@@ -336,7 +381,12 @@ export default function Sender({
         </p>
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-          <button type="button" onClick={sendTest} disabled={busy} className="btn btn-secondary">
+          <button
+            type="button"
+            onClick={sendTest}
+            disabled={busy}
+            className="btn btn-secondary"
+          >
             Send test to me
           </button>
           <button
@@ -363,7 +413,10 @@ export default function Sender({
         </div>
 
         {info && (
-          <p aria-live="polite" className="mt-4 text-sm font-medium text-gray-800 dark:text-gray-200">
+          <p
+            aria-live="polite"
+            className="mt-4 text-sm font-medium text-gray-800 dark:text-gray-200"
+          >
             {info}
           </p>
         )}
