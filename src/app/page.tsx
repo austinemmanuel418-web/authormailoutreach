@@ -2,7 +2,14 @@
 
 import { useEffect, useState } from "react";
 import type { Recipient } from "@/lib/emails";
-import { clearPassword, loadMessage, loadPassword, saveMessage } from "@/lib/storage";
+import {
+  clearPassword,
+  loadMessage,
+  loadPassword,
+  loadRecipients,
+  saveMessage,
+  saveRecipients,
+} from "@/lib/storage";
 import type { Message } from "@/lib/storage";
 import ThemeToggle from "@/components/ThemeToggle";
 import Unlock from "@/components/Unlock";
@@ -17,10 +24,11 @@ export default function Home() {
   const [message, setMessage] = useState<Message>({ subject: "", body: "" });
   const [running, setRunning] = useState(false); // true while "Send all" runs
 
-  // Load saved message and password once
+  // Load the saved message, password and recipient list once
   useEffect(() => {
     setMessage(loadMessage());
     setPassword(loadPassword());
+    setRecipients(loadRecipients());
     setReady(true);
   }, []);
 
@@ -28,6 +36,11 @@ export default function Home() {
   useEffect(() => {
     if (ready) saveMessage(message);
   }, [message, ready]);
+
+  // Save the recipient list every time it changes (only after the first load)
+  useEffect(() => {
+    if (ready) saveRecipients(recipients);
+  }, [recipients, ready]);
 
   // If the server says the password is wrong, lock the page again
   function lock() {
@@ -40,7 +53,9 @@ export default function Home() {
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-6 sm:py-10">
       <header className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-green-700 dark:text-green-400">Bulk Mailer</h1>
+        <h1 className="text-2xl font-bold text-green-700 dark:text-green-400">
+          Bulk Mailer
+        </h1>
         <ThemeToggle />
       </header>
 
@@ -48,7 +63,11 @@ export default function Home() {
         <Unlock onUnlock={setPassword} />
       ) : (
         <>
-          <Recipients recipients={recipients} setRecipients={setRecipients} locked={running} />
+          <Recipients
+            recipients={recipients}
+            setRecipients={setRecipients}
+            locked={running}
+          />
           <MessageForm message={message} setMessage={setMessage} />
           <Sender
             recipients={recipients}

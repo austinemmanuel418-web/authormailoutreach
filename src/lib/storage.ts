@@ -1,9 +1,15 @@
+import type { Recipient } from "@/lib/emails";
+
 // Everything we keep in the browser (localStorage) lives here
 
 export type Message = { subject: string; body: string };
 export type Settings = { minWait: number; maxWait: number; limit: number };
 
-export const DEFAULT_SETTINGS: Settings = { minWait: 10, maxWait: 20, limit: 30 };
+export const DEFAULT_SETTINGS: Settings = {
+  minWait: 10,
+  maxWait: 20,
+  limit: 30,
+};
 
 const KEYS = {
   message: "bulk:message",
@@ -31,7 +37,8 @@ function write(key: string, value: unknown) {
 }
 
 // Message
-export const loadMessage = () => read<Message>(KEYS.message, { subject: "", body: "" });
+export const loadMessage = () =>
+  read<Message>(KEYS.message, { subject: "", body: "" });
 export const saveMessage = (m: Message) => write(KEYS.message, m);
 
 // Settings (wait time, limit)
@@ -54,7 +61,10 @@ function today(): string {
   return new Date().toLocaleDateString("en-CA"); // looks like 2026-11-13
 }
 export function getSentToday(): number {
-  const d = read<{ date: string; count: number }>(KEYS.daily, { date: "", count: 0 });
+  const d = read<{ date: string; count: number }>(KEYS.daily, {
+    date: "",
+    count: 0,
+  });
   return d.date === today() ? d.count : 0;
 }
 export function addSentToday(): number {
@@ -73,3 +83,17 @@ export function clearPassword() {
     /* ignore */
   }
 }
+// The recipient list (emails, names, messages, edits, status)
+const RECIPIENTS_KEY = "bulk:recipients";
+
+export function loadRecipients(): Recipient[] {
+  const list = read<Recipient[]>(RECIPIENTS_KEY, []);
+  if (!Array.isArray(list)) return [];
+  // If the page closed in the middle of sending, put those rows back to "waiting"
+  return list.map((r) =>
+    r.status === "sending" ? { ...r, status: "waiting" as const } : r,
+  );
+}
+
+export const saveRecipients = (list: Recipient[]) =>
+  write(RECIPIENTS_KEY, list);
